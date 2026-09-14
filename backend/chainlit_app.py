@@ -163,7 +163,6 @@ If a tool returns an error, explain it to the user and suggest solutions."""
     ).send()
 
 
-@cl.on_message
 async def main(message: cl.Message):
     """
     Process user messages and interact with tools.
@@ -243,7 +242,6 @@ async def main(message: cl.Message):
         ).send()
 
 
-@cl.on_message
 async def handle_tool_request(message: cl.Message):
     """
     Handle direct tool requests in natural language.
@@ -277,7 +275,7 @@ async def handle_tool_request(message: cl.Message):
         await cl.Message(content=f"**Tool:** {tool_name}\n```json\n{result_text}\n```").send()
 
 
-@cl.route_message
+@cl.on_message
 async def route_message(message: cl.Message):
     """
     Route messages to appropriate handler.
