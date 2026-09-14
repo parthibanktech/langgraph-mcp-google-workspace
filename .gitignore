@@ -9,6 +9,8 @@ backend/credentials.json
 .env
 backend/.env
 *.env
+*.pem
+.chainlit/
 
 # Python & Virtual Environments
 __pycache__/

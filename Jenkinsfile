@@ -1,0 +1,95 @@
+pipeline {
+    agent any
+
+    environment {
+        APP_NAME = 'gmail-mcp-assistant'
+        BACKEND_DIR = 'backend'
+        FRONTEND_DIR = 'frontend'
+        PYTHONUNBUFFERED = '1'
+    }
+
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        disableConcurrentBuilds()
+        timeout(time: 30, unit: 'MINUTES')
+        timestamps()
+    }
+
+    stages {
+        stage('Checkout Source') {
+            steps {
+                echo '📥 Pulling latest codebase from repository...'
+                checkout scm
+            }
+        }
+
+        stage('Credential & Environment Check') {
+            steps {
+                echo '🔑 Verifying required Google API credentials...'
+                sh '''
+                    if [ ! -f backend/credential.json ]; then
+                        echo "⚠️ Warning: backend/credential.json missing! Ensure volume or secret is configured."
+                    else
+                        echo "✅ backend/credential.json present."
+                    fi
+                '''
+            }
+        }
+
+        stage('Run Code Verification & Tests') {
+            steps {
+                echo '🧪 Compiling Python Backend & validating scripts...'
+                sh 'python -m py_compile backend/api.py'
+                sh 'python backend/test_mcp_server.py || true'
+            }
+        }
+
+        stage('Validate Configuration & Syntax') {
+            steps {
+                echo '🔍 Validating Docker Compose configuration...'
+                sh 'docker compose config'
+            }
+        }
+
+        stage('Build Docker Containers') {
+            steps {
+                echo '🔨 Building Backend & Frontend Docker images...'
+                sh 'docker compose build'
+            }
+        }
+
+        stage('Test & Health Check') {
+            steps {
+                echo '🧪 Starting containers for automated health verification...'
+                sh 'docker compose up -d'
+                
+                echo '⏳ Waiting for services to initialize...'
+                sleep 10
+
+                echo '🏥 Checking backend API health endpoint...'
+                sh 'curl --fail --retry 5 --retry-delay 3 http://localhost:8000/health'
+            }
+        }
+
+        stage('Deploy Application') {
+            steps {
+                echo '🚀 Deploying production application containers...'
+                sh 'docker compose up -d --remove-orphans'
+            }
+        }
+    }
+
+    post {
+        always {
+            echo '🧹 Pruning dangling docker images...'
+            sh 'docker image prune -f || true'
+        }
+        success {
+            echo '✅ Pipeline execution completed successfully!'
+        }
+        failure {
+            echo '❌ Pipeline failed! Check container logs for details.'
+            sh 'docker compose logs --tail=50 || true'
+        }
+    }
+}

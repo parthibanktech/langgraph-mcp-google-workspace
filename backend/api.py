@@ -12,6 +12,8 @@ from typing import List, Optional
 # Ensure UTF-8 output encoding for Windows console compatibility
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8')
 
 # Add backend directory and workspace root to sys.path
 backend_dir = Path(__file__).parent
@@ -23,6 +25,7 @@ if str(root_dir) not in sys.path:
     sys.path.insert(0, str(root_dir))
 
 from fastapi import FastAPI, HTTPException, Query, Path as PathParam, Body
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from handlers.tool_handler import get_handler
 
@@ -37,6 +40,15 @@ app = FastAPI(
         "name": "Parthiban K",
         "email": "parthibankwarrior@gmail.com"
     }
+)
+
+# Enable CORS for frontend cross-origin requests
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -64,6 +76,9 @@ class SearchDriveRequest(BaseModel):
     keyword: str = Field(..., description="Keyword string to search across Drive file names and content")
     max_results: int = Field(default=10, ge=1, le=100, description="Maximum number of results to return (1-100)")
 
+class ChatRequest(BaseModel):
+    message: str = Field(..., description="User prompt message")
+
 
 # ============================================================================
 # API ENDPOINTS (EXPOSED IN SWAGGER UI)
@@ -79,9 +94,101 @@ def root():
     }
 
 @app.get("/health", tags=["Health & Status"])
+@app.get("/api/health", tags=["Health & Status"])
 def health_check():
     """Health check endpoint"""
     return {"status": "healthy", "service": "Gmail & Google Drive MCP REST API"}
+
+
+# --- AI AGENT CHAT ENDPOINT ---
+
+@app.post("/api/chat", tags=["AI Agent"])
+def chat_endpoint(request: ChatRequest):
+    """
+    Chat with the Gmail & Google Drive MCP Agent.
+    """
+    handler = get_handler("react-frontend-user")
+    prompt = request.message.strip()
+    prompt_lower = prompt.lower()
+    
+    tools_used = []
+    response_text = ""
+    data_list = []
+    
+    try:
+        if "email" in prompt_lower or "inbox" in prompt_lower or "unread" in prompt_lower or "mail" in prompt_lower:
+            query = "is:unread" if "unread" in prompt_lower else ""
+            res_str = handler.list_emails(query=query, max_results=5)
+            parsed = json.loads(res_str)
+            is_ok = parsed.get("success", False) or parsed.get("status") == "success"
+            tools_used.append({"name": "list_emails", "query": query, "success": is_ok})
+            
+            if is_ok and isinstance(parsed.get("data"), dict):
+                data_list = parsed["data"].get("emails", [])
+                count = len(data_list)
+                response_text = f"Found {count} email(s) in inbox matching '{query or 'all'}'."
+            elif is_ok and isinstance(parsed.get("data"), list):
+                data_list = parsed["data"]
+                count = len(data_list)
+                response_text = f"Found {count} email(s) in inbox matching '{query or 'all'}'."
+            else:
+                response_text = f"Gmail search result: {parsed.get('error') or parsed.get('message') or 'No emails found.'}"
+                
+        elif "drive" in prompt_lower or "file" in prompt_lower or "doc" in prompt_lower or "search" in prompt_lower:
+            kw = prompt_lower.replace("drive", "").replace("file", "").replace("search", "").strip() or "doc"
+            res_str = handler.search_drive(keyword=kw, max_results=5)
+            parsed = json.loads(res_str)
+            is_ok = parsed.get("success", False) or parsed.get("status") == "success"
+            tools_used.append({"name": "search_drive", "keyword": kw, "success": is_ok})
+            
+            if is_ok and isinstance(parsed.get("data"), dict):
+                data_list = parsed["data"].get("files", [])
+                count = len(data_list)
+                response_text = f"Found {count} Google Drive file(s) matching '{kw}'."
+            elif is_ok and isinstance(parsed.get("data"), list):
+                data_list = parsed["data"]
+                count = len(data_list)
+                response_text = f"Found {count} Google Drive file(s) matching '{kw}'."
+            else:
+                response_text = f"Google Drive search result: {parsed.get('error') or parsed.get('message') or 'No files found.'}"
+                
+        else:
+            response_text = f"I am your Gmail & Google Drive MCP AI Assistant! You can ask me to list unread emails, search files in Drive, read messages, or send emails."
+            
+        return {
+            "status": "success",
+            "message": response_text,
+            "tools_used": tools_used,
+            "data": data_list
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Agent processing failed: {str(e)}",
+            "tools_used": tools_used,
+            "data": []
+        }
+
+@app.get("/api/logs", tags=["Health & Status"])
+def get_audit_logs():
+    """
+    Retrieve audit log activity entries.
+    """
+    log_path = Path(__file__).parent / "logs" / "audit.log"
+    logs = []
+    if log_path.exists():
+        try:
+            with open(log_path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+                for line in reversed(lines[-50:]):
+                    if line.strip():
+                        try:
+                            logs.append(json.loads(line))
+                        except json.JSONDecodeError:
+                            logs.append({"raw": line.strip()})
+        except Exception as e:
+            logs.append({"error": f"Failed to read log file: {str(e)}"})
+    return {"logs": logs, "total": len(logs)}
 
 
 # --- GMAIL ENDPOINTS ---

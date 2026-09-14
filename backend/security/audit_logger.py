@@ -35,8 +35,8 @@ class AuditLogger:
         self.logger = logging.getLogger("audit")
         self.logger.setLevel(logging.INFO)
         
-        # File handler
-        handler = logging.FileHandler(self.log_path)
+        # File handler with UTF-8 encoding
+        handler = logging.FileHandler(self.log_path, encoding='utf-8')
         formatter = logging.Formatter('%(message)s')  # Just the JSON
         handler.setFormatter(formatter)
         self.logger.addHandler(handler)
