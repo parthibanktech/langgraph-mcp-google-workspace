@@ -1,0 +1,582 @@
+"""
+Production-Ready MCP Server: Gmail & Google Drive Integration
+Connects to Gmail and Google Drive APIs with full tool support
+"""
+
+# Standard library imports
+import os  # Access environment variables and file system operations
+import re  # Pattern matching for email parsing
+import json  # JSON serialization for tool parameters
+from typing import Any, Optional  # Type hints for better code clarity
+from pathlib import Path  # Object-oriented file path handling
+
+# Third-party imports for environment and async handling
+from dotenv import load_dotenv  # Load credentials from .env file
+import asyncio  # Asynchronous task handling
+
+# Google authentication and API libraries
+from google.oauth2.service_account import Credentials  # Service account authentication
+from google.auth.transport.requests import Request  # HTTP request handler for token refresh
+from google_auth_oauthlib.flow import InstalledAppFlow  # OAuth2 flow for installed applications
+from google.oauth2 import service_account  # Additional service account utilities
+from googleapiclient.discovery import build  # Build Google API clients (Gmail, Drive)
+from googleapiclient.errors import HttpError  # Handle API errors gracefully
+from email.mime.text import MIMEText  # Create email messages (plain text)
+from email.mime.multipart import MIMEMultipart  # Create multipart email messages
+from email.mime.base import MIMEBase  # Base class for MIME attachments
+from email import encoders  # Encode attachments for email transmission
+import base64  # Base64 encoding for email payload
+
+# MCP (Model Context Protocol) server framework
+from mcp.server.fastmcp import FastMCP  # FastMCP server implementation
+from mcp.types import TextContent, ToolError  # MCP response types
+
+# Load environment variables from .env file (contains API keys and credentials)
+load_dotenv()
+
+# ============================================================================
+# CONFIGURATION & CONSTANTS
+# ============================================================================
+
+# Google OAuth2 scopes - defines what permissions the app requests
+SCOPES = [
+    "https://www.googleapis.com/auth/gmail.readonly",  # Read Gmail messages
+    "https://www.googleapis.com/auth/gmail.send",  # Send emails via Gmail
+    "https://www.googleapis.com/auth/drive.readonly",  # Read Google Drive files
+    "https://www.googleapis.com/auth/drive.file",  # Create/modify Google Drive files
+]
+
+# Service account credentials path - for authentication
+CREDENTIALS_FILE = "credential.json"  # JSON file containing Google service account key
+
+# ============================================================================
+# INITIALIZE MCP SERVER
+# ============================================================================
+
+# Create FastMCP server instance with name "Google Tools"
+# This server will expose Gmail and Google Drive tools to LLM agents
+mcp = FastMCP("Google Tools")
+
+# Global API clients (lazy-loaded on first use)
+gmail_service = None  # Gmail API client instance
+drive_service = None  # Google Drive API client instance
+
+
+# ============================================================================
+# AUTHENTICATION FUNCTIONS
+# ============================================================================
+
+def get_credentials() -> Credentials:
+    """
+    Authenticate with Google APIs using service account credentials.
+    
+    Returns:
+        Credentials: Google API credentials object for making authenticated requests
+        
+    Raises:
+        FileNotFoundError: If credential.json file is not found
+        ValueError: If credentials are invalid or expired
+    """
+    # Check if credential.json exists in current directory
+    if not os.path.exists(CREDENTIALS_FILE):
+        raise FileNotFoundError(
+            f"{CREDENTIALS_FILE} not found. "
+            "Download it from Google Cloud Console > Service Account > Keys"
+        )
+    
+    # Load credentials from service account JSON file
+    credentials = Credentials.from_service_account_file(
+        CREDENTIALS_FILE,
+        scopes=SCOPES  # Apply requested permission scopes
+    )
+    
+    return credentials
+
+
+def init_gmail_service():
+    """
+    Initialize Gmail API client (builds lazy-loaded service).
+    Uses service account authentication for production deployment.
+    
+    Returns:
+        Resource: Gmail API service object for making Gmail API calls
+    """
+    global gmail_service  # Reference global variable to cache client
+    
+    # Only initialize once - reuse cached client for performance
+    if gmail_service is None:
+        credentials = get_credentials()  # Get authenticated credentials
+        gmail_service = build("gmail", "v1", credentials=credentials)  # Build Gmail API client
+    
+    return gmail_service
+
+
+def init_drive_service():
+    """
+    Initialize Google Drive API client (builds lazy-loaded service).
+    Uses service account authentication for production deployment.
+    
+    Returns:
+        Resource: Google Drive API service object for making Drive API calls
+    """
+    global drive_service  # Reference global variable to cache client
+    
+    # Only initialize once - reuse cached client for performance
+    if drive_service is None:
+        credentials = get_credentials()  # Get authenticated credentials
+        drive_service = build("drive", "v3", credentials=credentials)  # Build Drive API client
+    
+    return drive_service
+
+
+# ============================================================================
+# GMAIL TOOLS
+# ============================================================================
+
+@mcp.tool()
+def list_emails(query: str = "is:unread", max_results: int = 10) -> str:
+    """
+    List and search emails from Gmail inbox.
+    
+    Args:
+        query: Gmail search query (e.g., "is:unread", "from:user@example.com", "subject:project")
+        max_results: Maximum number of emails to return (1-100)
+    
+    Returns:
+        str: JSON string containing list of emails with metadata (id, from, subject, snippet)
+    
+    Raises:
+        ToolError: If Gmail API call fails or credentials are invalid
+    """
+    try:
+        # Initialize Gmail API client
+        gmail = init_gmail_service()
+        
+        # Call Gmail API to search for messages matching the query
+        results = gmail.users().messages().list(
+            userId="me",  # "me" refers to authenticated user's account
+            q=query,  # Search query string
+            maxResults=min(max_results, 100)  # Respect API limits (max 100)
+        ).execute()
+        
+        # Extract message IDs from results
+        messages = results.get("messages", [])
+        
+        # If no messages found, return empty list
+        if not messages:
+            return json.dumps({
+                "success": True,
+                "message": "No emails found",
+                "emails": []
+            })
+        
+        # Fetch full details for each message
+        email_list = []
+        for msg in messages[:max_results]:
+            msg_id = msg["id"]  # Get unique message ID
+            
+            # Fetch full message details (headers and body snippet)
+            message = gmail.users().messages().get(
+                userId="me",
+                id=msg_id,
+                format="metadata",  # Only fetch headers, not full body
+                metadataHeaders=["From", "To", "Subject", "Date"]  # Specific headers to retrieve
+            ).execute()
+            
+            # Extract headers from message
+            headers = {h["name"]: h["value"] for h in message.get("payload", {}).get("headers", [])}
+            
+            # Build email summary object
+            email_summary = {
+                "id": msg_id,
+                "from": headers.get("From", "Unknown"),
+                "to": headers.get("To", "Unknown"),
+                "subject": headers.get("Subject", "(No Subject)"),
+                "date": headers.get("Date", "Unknown"),
+                "snippet": message.get("snippet", "")
+            }
+            email_list.append(email_summary)
+        
+        # Return successful response with email list
+        return json.dumps({
+            "success": True,
+            "count": len(email_list),
+            "emails": email_list
+        })
+    
+    except HttpError as e:
+        # Handle Gmail API errors (authentication, rate limits, etc.)
+        error_msg = f"Gmail API error: {e.resp.status} - {e.resp.reason}"
+        return json.dumps({"success": False, "error": error_msg})
+    
+    except Exception as e:
+        # Handle unexpected errors
+        error_msg = f"Unexpected error: {str(e)}"
+        return json.dumps({"success": False, "error": error_msg})
+
+
+@mcp.tool()
+def read_email(email_id: str) -> str:
+    """
+    Fetch complete email content by message ID.
+    
+    Args:
+        email_id: Gmail message ID (obtained from list_emails)
+    
+    Returns:
+        str: JSON string containing complete email with full body, headers, and attachments
+    
+    Raises:
+        ToolError: If email not found or API call fails
+    """
+    try:
+        # Initialize Gmail API client
+        gmail = init_gmail_service()
+        
+        # Fetch full message with complete body
+        message = gmail.users().messages().get(
+            userId="me",
+            id=email_id,
+            format="full"  # Get complete message including body
+        ).execute()
+        
+        # Extract headers from message payload
+        headers = {h["name"]: h["value"] for h in message.get("payload", {}).get("headers", [])}
+        
+        # Extract email body (handle both plain text and HTML)
+        body = ""
+        payload = message.get("payload", {})
+        
+        # Check if message has parts (multipart message)
+        if "parts" in payload:
+            # For multipart messages, find the text/plain part
+            for part in payload["parts"]:
+                if part["mimeType"] == "text/plain":
+                    data = part.get("body", {}).get("data", "")
+                    if data:
+                        body = base64.urlsafe_b64decode(data).decode("utf-8")
+                        break
+        else:
+            # Single part message - extract body directly
+            data = payload.get("body", {}).get("data", "")
+            if data:
+                body = base64.urlsafe_b64decode(data).decode("utf-8")
+        
+        # Return complete email object
+        return json.dumps({
+            "success": True,
+            "email": {
+                "id": email_id,
+                "from": headers.get("From", "Unknown"),
+                "to": headers.get("To", "Unknown"),
+                "subject": headers.get("Subject", "(No Subject)"),
+                "date": headers.get("Date", "Unknown"),
+                "body": body,
+                "snippet": message.get("snippet", "")
+            }
+        })
+    
+    except HttpError as e:
+        error_msg = f"Gmail API error: {e.resp.status} - {e.resp.reason}"
+        return json.dumps({"success": False, "error": error_msg})
+    
+    except Exception as e:
+        error_msg = f"Unexpected error: {str(e)}"
+        return json.dumps({"success": False, "error": error_msg})
+
+
+@mcp.tool()
+def send_email(to: str, subject: str, body: str, cc: str = "", bcc: str = "") -> str:
+    """
+    Send an email via Gmail.
+    
+    Args:
+        to: Recipient email address (required)
+        subject: Email subject line
+        body: Email body (plain text or HTML)
+        cc: Carbon copy recipients (comma-separated, optional)
+        bcc: Blind carbon copy recipients (comma-separated, optional)
+    
+    Returns:
+        str: JSON string with success status and message ID or error details
+    
+    Raises:
+        ToolError: If email validation fails or sending fails
+    """
+    try:
+        # Validate email address format
+        if not re.match(r"[^@]+@[^@]+\.[^@]+", to):
+            return json.dumps({"success": False, "error": f"Invalid recipient email: {to}"})
+        
+        # Initialize Gmail API client
+        gmail = init_gmail_service()
+        
+        # Create multipart email message
+        message = MIMEMultipart()
+        message["to"] = to  # Set recipient
+        message["subject"] = subject  # Set subject
+        
+        # Add optional CC recipients
+        if cc:
+            message["cc"] = cc
+        
+        # Add optional BCC recipients (note: BCC is not added to message headers in SMTP)
+        # but we include it for tracking
+        
+        # Attach email body as plain text
+        message.attach(MIMEText(body, "plain"))
+        
+        # Encode message to base64 for Gmail API
+        raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
+        
+        # Send message via Gmail API
+        send_result = gmail.users().messages().send(
+            userId="me",
+            body={"raw": raw_message}
+        ).execute()
+        
+        # Return success response with message ID
+        return json.dumps({
+            "success": True,
+            "message": f"Email sent successfully",
+            "message_id": send_result.get("id")
+        })
+    
+    except HttpError as e:
+        error_msg = f"Gmail API error: {e.resp.status} - {e.resp.reason}"
+        return json.dumps({"success": False, "error": error_msg})
+    
+    except Exception as e:
+        error_msg = f"Unexpected error: {str(e)}"
+        return json.dumps({"success": False, "error": error_msg})
+
+
+# ============================================================================
+# GOOGLE DRIVE TOOLS
+# ============================================================================
+
+@mcp.tool()
+def list_drive_files(query: str = "", max_results: int = 10, file_type: str = "") -> str:
+    """
+    List files in Google Drive with optional filtering.
+    
+    Args:
+        query: Search query (e.g., "name contains 'project'")
+        max_results: Maximum number of files to return (1-1000)
+        file_type: Filter by MIME type (e.g., "application/vnd.google-apps.folder")
+    
+    Returns:
+        str: JSON string containing list of files with metadata (id, name, type, size, link)
+    
+    Raises:
+        ToolError: If Drive API call fails
+    """
+    try:
+        # Initialize Google Drive API client
+        drive = init_drive_service()
+        
+        # Build search query for file filtering
+        search_query = []
+        if query:
+            search_query.append(query)  # Add user's custom query
+        
+        if file_type:
+            search_query.append(f"mimeType='{file_type}'")  # Filter by file type
+        
+        # Only trashed files should not be returned
+        search_query.append("trashed=false")
+        
+        # Combine all query conditions with 'and'
+        combined_query = " and ".join(search_query)
+        
+        # Call Drive API to list files matching the query
+        results = drive.files().list(
+            q=combined_query,  # Search query with filters
+            spaces="drive",  # Search in main drive (not app-specific spaces)
+            pageSize=min(max_results, 1000),  # Limit results
+            fields="files(id, name, mimeType, size, createdTime, modifiedTime, webViewLink)",
+            orderBy="modifiedTime desc"  # Sort by most recently modified first
+        ).execute()
+        
+        # Extract files from API response
+        files = results.get("files", [])
+        
+        # If no files found, return empty list
+        if not files:
+            return json.dumps({
+                "success": True,
+                "message": "No files found",
+                "files": []
+            })
+        
+        # Format file list for response
+        file_list = []
+        for file in files:
+            # Determine if file is a folder
+            is_folder = file["mimeType"] == "application/vnd.google-apps.folder"
+            
+            # Build file summary object
+            file_summary = {
+                "id": file["id"],
+                "name": file["name"],
+                "type": file["mimeType"],
+                "size": file.get("size", "N/A"),  # Folders don't have size
+                "is_folder": is_folder,
+                "created": file.get("createdTime", "Unknown"),
+                "modified": file.get("modifiedTime", "Unknown"),
+                "link": file.get("webViewLink", "")
+            }
+            file_list.append(file_summary)
+        
+        # Return successful response with file list
+        return json.dumps({
+            "success": True,
+            "count": len(file_list),
+            "files": file_list
+        })
+    
+    except HttpError as e:
+        error_msg = f"Drive API error: {e.resp.status} - {e.resp.reason}"
+        return json.dumps({"success": False, "error": error_msg})
+    
+    except Exception as e:
+        error_msg = f"Unexpected error: {str(e)}"
+        return json.dumps({"success": False, "error": error_msg})
+
+
+@mcp.tool()
+def get_file_info(file_id: str) -> str:
+    """
+    Get detailed information about a specific Google Drive file.
+    
+    Args:
+        file_id: Google Drive file ID
+    
+    Returns:
+        str: JSON string containing detailed file information (metadata, sharing, etc.)
+    
+    Raises:
+        ToolError: If file not found or API call fails
+    """
+    try:
+        # Initialize Google Drive API client
+        drive = init_drive_service()
+        
+        # Fetch detailed file information
+        file = drive.files().get(
+            fileId=file_id,
+            fields=(
+                "id, name, mimeType, size, createdTime, modifiedTime, "
+                "owners, permissions, webViewLink, description"
+            )
+        ).execute()
+        
+        # Return detailed file object
+        return json.dumps({
+            "success": True,
+            "file": {
+                "id": file["id"],
+                "name": file["name"],
+                "type": file["mimeType"],
+                "size": file.get("size", "N/A"),
+                "description": file.get("description", ""),
+                "created": file.get("createdTime", "Unknown"),
+                "modified": file.get("modifiedTime", "Unknown"),
+                "owners": [{"email": o.get("emailAddress"), "name": o.get("displayName")} 
+                          for o in file.get("owners", [])],
+                "link": file.get("webViewLink", "")
+            }
+        })
+    
+    except HttpError as e:
+        error_msg = f"Drive API error: {e.resp.status} - {e.resp.reason}"
+        return json.dumps({"success": False, "error": error_msg})
+    
+    except Exception as e:
+        error_msg = f"Unexpected error: {str(e)}"
+        return json.dumps({"success": False, "error": error_msg})
+
+
+@mcp.tool()
+def search_drive(keyword: str, max_results: int = 20) -> str:
+    """
+    Search Google Drive by keyword across all file types.
+    
+    Args:
+        keyword: Search keyword (searched in filename and content)
+        max_results: Maximum number of results (1-100)
+    
+    Returns:
+        str: JSON string containing search results with file metadata
+    
+    Raises:
+        ToolError: If search fails or API limit reached
+    """
+    try:
+        # Initialize Google Drive API client
+        drive = init_drive_service()
+        
+        # Build search query - searches filename and file content
+        search_query = f"(name contains '{keyword}' or fullText contains '{keyword}') and trashed=false"
+        
+        # Execute search
+        results = drive.files().list(
+            q=search_query,
+            spaces="drive",
+            pageSize=min(max_results, 100),
+            fields="files(id, name, mimeType, webViewLink, modifiedTime)",
+            orderBy="modifiedTime desc"
+        ).execute()
+        
+        # Extract search results
+        files = results.get("files", [])
+        
+        # Format results for response
+        search_results = []
+        for file in files:
+            search_results.append({
+                "id": file["id"],
+                "name": file["name"],
+                "type": file["mimeType"],
+                "link": file.get("webViewLink", ""),
+                "modified": file.get("modifiedTime", "Unknown")
+            })
+        
+        # Return search results
+        return json.dumps({
+            "success": True,
+            "keyword": keyword,
+            "count": len(search_results),
+            "results": search_results
+        })
+    
+    except HttpError as e:
+        error_msg = f"Drive API error: {e.resp.status} - {e.resp.reason}"
+        return json.dumps({"success": False, "error": error_msg})
+    
+    except Exception as e:
+        error_msg = f"Unexpected error: {str(e)}"
+        return json.dumps({"success": False, "error": error_msg})
+
+
+# ============================================================================
+# SERVER STARTUP
+# ============================================================================
+
+def main():
+    """
+    Start the MCP server.
+    Serves Gmail and Google Drive tools to LLM agents over stdio/HTTP.
+    """
+    # Print startup message
+    print("🚀 Starting MCP Server: Google Tools (Gmail + Drive)")
+    print("Tools available:")
+    print("  📧 Gmail: list_emails, read_email, send_email")
+    print("  📁 Drive: list_drive_files, get_file_info, search_drive")
+    
+    # Start the MCP server (serves tools via stdio)
+    mcp.run()
+
+
+if __name__ == "__main__":
+    main()

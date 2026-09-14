@@ -1,0 +1,33 @@
+# Credentials & Environment Variables
+*.json
+!package.json
+!tsconfig.json
+credential.json
+credentials.json
+backend/credential.json
+backend/credentials.json
+.env
+backend/.env
+*.env
+
+# Python & Virtual Environments
+__pycache__/
+*.py[cod]
+*$py.class
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.venv
+
+# Logs & Audit Output
+logs/
+*.log
+backend/logs/
+
+# IDE & OS Files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,23 @@
+fastapi>=0.116.1
+starlette>=0.47.2
+uvicorn
+python-dotenv
+
+chainlit>=2.9.2
+
+# LLM and Agent Framework
+openai>=1.0.0
+langchain>=0.1.0
+langchain-core>=1.6.3
+langchain-openai>=0.1.0
+langgraph>=0.0.1
+langchain-mcp-adapters>=0.3.2
+
+# MCP Protocol
+mcp>=1.30.0
+
+# Google APIs
+google-api-python-client>=2.100.0
+google-auth>=2.25.0
+google-auth-oauthlib>=1.2.0
+google-auth-httplib2>=0.2.0
