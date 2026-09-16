@@ -7,9 +7,19 @@ import os
 from pathlib import Path
 
 # === Project Paths ===
-PROJECT_ROOT = Path(__file__).parent.parent.parent
-BACKEND_DIR = PROJECT_ROOT / "backend"
-CREDENTIALS_PATH = BACKEND_DIR / os.getenv("GOOGLE_CREDENTIALS_PATH", "credential.json")
+BACKEND_DIR = Path(__file__).parent.parent.resolve()
+PROJECT_ROOT = BACKEND_DIR.parent
+
+cred_setting = os.getenv("GOOGLE_CREDENTIALS_PATH", "credential.json")
+if Path(cred_setting).is_absolute():
+    CREDENTIALS_PATH = Path(cred_setting)
+else:
+    possible_paths = [
+        BACKEND_DIR / cred_setting,
+        Path.cwd() / cred_setting,
+        Path("/app") / cred_setting
+    ]
+    CREDENTIALS_PATH = next((p for p in possible_paths if p.exists()), BACKEND_DIR / cred_setting)
 
 # === Google Cloud Settings ===
 GOOGLE_PROJECT_ID = os.getenv("GOOGLE_PROJECT_ID", "")
@@ -75,7 +85,24 @@ def validate_config():
     
     # Check credentials file exists
     if not CREDENTIALS_PATH.exists():
-        errors.append(f"Credentials file not found: {CREDENTIALS_PATH}")
+        if os.getenv("ALLOW_MISSING_CREDENTIALS", "false").lower() == "true" or os.getenv("CI", "false").lower() == "true":
+            print(f"⚠️  Warning: Credentials file not found at {CREDENTIALS_PATH} (CI/Test mode)")
+        else:
+            errors.append(f"Credentials file not found: {CREDENTIALS_PATH}")
+    
+    # Validate rate limits
+    if RATE_LIMIT_REQUESTS <= 0:
+        errors.append("RATE_LIMIT_REQUESTS must be > 0")
+    
+    # Validate cache TTL
+    if CREDENTIALS_CACHE_TTL <= 0:
+        errors.append("CREDENTIALS_CACHE_TTL must be > 0")
+    
+    # Validate data retention
+    if DATA_RETENTION_DAYS <= 0:
+        errors.append("DATA_RETENTION_DAYS must be > 0")
+    
+    return errors
     
     # Validate rate limits
     if RATE_LIMIT_REQUESTS <= 0:
