@@ -4,7 +4,7 @@ import { Sun, Moon, Search, ShieldAlert, Sparkles } from 'lucide-react';
 export default function Header({ activeTab, theme, toggleTheme }) {
   const getTabTitle = () => {
     switch (activeTab) {
-      case 'dashboard': return 'Dashboard Overview';
+      case 'dashboard': return 'Dashboard Overview -V2';
       case 'gmail': return 'Gmail Inbox & Assistant';
       case 'drive': return 'Google Drive File Explorer';
       case 'agent': return 'LangGraph AI Agent Playground';
