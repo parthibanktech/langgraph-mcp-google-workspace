@@ -61,7 +61,9 @@ pipeline {
         stage('Test & Health Check') {
             steps {
                 echo '🧪 Starting containers for automated health verification...'
-                sh 'docker compose up -d'
+                sh 'docker rm -f mcp_backend mcp_frontend || true'
+                sh 'docker compose down --remove-orphans || true'
+                sh 'docker compose up -d --force-recreate --remove-orphans'
                 
                 echo '⏳ Waiting for services to initialize...'
                 sleep 10
@@ -74,7 +76,7 @@ pipeline {
         stage('Deploy Application') {
             steps {
                 echo '🚀 Deploying production application containers...'
-                sh 'docker compose up -d --remove-orphans'
+                sh 'docker compose up -d --force-recreate --remove-orphans'
             }
         }
     }

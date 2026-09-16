@@ -7,7 +7,24 @@ import json
 import sys
 import os
 from pathlib import Path
-import pytest  # Explicit Pytest framework import
+try:
+    import pytest
+except ImportError:
+    class DummyPytest:
+        def fixture(self, *args, **kwargs):
+            def decorator(func):
+                return func
+            return decorator
+        @property
+        def mark(self):
+            class DummyMark:
+                def __getattr__(self, name):
+                    def decorator(func):
+                        return func
+                    return decorator
+            return DummyMark()
+    pytest = DummyPytest()
+
 
 # Ensure UTF-8 output encoding for Windows console compatibility
 if hasattr(sys.stdout, 'reconfigure'):
