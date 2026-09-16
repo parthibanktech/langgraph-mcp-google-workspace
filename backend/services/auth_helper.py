@@ -34,13 +34,16 @@ def load_google_credentials():
         if (time.time() - _last_token_refresh) < CREDENTIALS_CACHE_TTL:
             return _cached_credentials  # Return cached credentials without disk/network overhead
 
-    # Step 2: Validate that credential.json exists on the filesystem
-    if not CREDENTIALS_PATH.exists():
-        raise FileNotFoundError(f"Credential file not found at: {CREDENTIALS_PATH}")
+    # Step 2: Validate that credential.json exists and is a file (not a directory auto-created by Docker)
+    if not CREDENTIALS_PATH.exists() or CREDENTIALS_PATH.is_dir():
+        raise FileNotFoundError(f"Google credentials file ('credential.json') is missing or invalid. Please ensure your valid credential.json is placed in backend/ directory.")
 
     # Step 3: Open and parse the JSON file to identify the authentication type
-    with open(CREDENTIALS_PATH, "r", encoding="utf-8") as f:
-        data = json.load(f)  # Parse JSON content into Python dictionary
+    try:
+        with open(CREDENTIALS_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)  # Parse JSON content into Python dictionary
+    except IsADirectoryError:
+        raise FileNotFoundError(f"Google credentials file ('credential.json') is missing or invalid (mounted as directory). Please upload valid credential.json to backend/ directory.")
 
     # Step 4: Handle Service Account key format ("type": "service_account")
     if data.get("type") == "service_account":

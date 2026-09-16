@@ -13,8 +13,6 @@ services:
       - PYTHONIOENCODING=utf-8
       - ALLOW_MISSING_CREDENTIALS=true
     volumes:
-      - ./backend/credential.json:/app/credential.json:ro
-      - ./backend/token.json:/app/token.json
       - ./backend/logs:/app/logs
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
