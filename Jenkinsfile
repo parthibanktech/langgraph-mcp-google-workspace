@@ -27,10 +27,15 @@ pipeline {
             steps {
                 echo '🔑 Verifying required Google API credentials...'
                 sh '''
-                    if [ ! -f backend/credential.json ]; then
-                        echo "⚠️ Warning: backend/credential.json missing! Ensure volume or secret is configured."
+                    if [ -f /var/jenkins_home/secrets/credential.json ]; then
+                        echo "📋 Copying credential.json from Jenkins secrets store..."
+                        cp /var/jenkins_home/secrets/credential.json backend/credential.json
+                    fi
+
+                    if [ ! -f backend/credential.json ] || [ -d backend/credential.json ]; then
+                        echo "⚠️ Warning: backend/credential.json missing or directory! Ensure credential.json is placed in backend/ or uploaded to server."
                     else
-                        echo "✅ backend/credential.json present."
+                        echo "✅ backend/credential.json is present and valid."
                     fi
                 '''
             }

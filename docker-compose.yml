@@ -13,6 +13,8 @@ services:
       - ALLOW_MISSING_CREDENTIALS=true
     volumes:
       - ./backend/logs:/app/logs
+      - ./backend/credential.json:/app/credential.json
+      - ./backend/token.json:/app/token.json
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
       interval: 15s
