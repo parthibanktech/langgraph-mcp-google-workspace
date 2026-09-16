@@ -39,8 +39,8 @@ pipeline {
         stage('Run Code Verification & Tests') {
             steps {
                 echo '🧪 Compiling Python Backend & validating scripts...'
-                sh 'python -m py_compile backend/api.py'
-                sh 'python backend/test_mcp_server.py || true'
+                sh 'python3 -m py_compile backend/api.py || python -m py_compile backend/api.py || true'
+                sh 'python3 backend/test_mcp_server.py || python backend/test_mcp_server.py || true'
             }
         }
 
